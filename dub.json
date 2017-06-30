@@ -1,0 +1,12 @@
+{
+	"name": "drey-client",
+	"authors": [
+		"juan"
+	],
+	"dependencies": {
+		"zmqd": "~>1.1.0"
+	},
+	"description": "A minimal D application.",
+	"copyright": "Copyright © 2017, juan",
+	"license": "proprietary"
+}

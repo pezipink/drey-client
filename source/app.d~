@@ -1,0 +1,178 @@
+import std.stdio;// Simple request-reply broker
+import std.concurrency;
+import core.time;
+import std.format;
+import zmqd;
+import std.string;
+import std.json;
+import std.conv;
+//import zhelpers;
+enum MessageType
+  {
+    Connect = 0x1,
+    Heartbeat = 0x2,
+    Data  = 0x3,    
+  }
+
+struct ClientMessage
+{
+  string client;
+  MessageType type;
+  string json;  
+}
+
+__gshared string id;
+
+string toResponseJson(int response)
+{
+  JSONValue js;
+  js["type"] = "response";
+  js["id"] = response;
+  return js.toString;
+}
+
+void client(Tid parentId)
+{
+    auto client = Socket(SocketType.dealer);
+    client.identity =  id;
+    client.connect("tcp://localhost:5560");
+    //    auto server = Socket(SocketType.router);
+    //    server.connect("tcp://*:5550");
+    
+    // Initialize poll set
+    auto items = [
+        PollItem(client, PollFlags.pollIn),
+    ];
+
+    ubyte[] data = [0x1];
+    client.send(data);
+    writeln("sent connect message");
+    MonoTime lastHeart = MonoTime.currTime;
+    MonoTime lastServerHeart = MonoTime.currTime;
+    bool awaitingResponse = false;
+    while (true)
+      {
+        Frame frame;
+        if(!receiveTimeout
+           (dur!"msecs"(1),
+            (string s)
+            {
+              if(awaitingResponse)
+                {
+                  awaitingResponse = false;
+                  ubyte[] b = [0x3];
+                  client.send(b,true);
+                  client.send(toResponseJson(parse!int(s)));
+                }
+              else
+                {
+                  string msg = "";
+                  int index = indexOf(s,":");
+                  if(index > -1)
+                    {
+                      string targ = s[0..index];
+                      string rest = s[index.. $];
+                      writeln("targ ", targ , " rest ", rest);
+                      msg = format("{\"type\":\"chat\",\"id\":\"%s\",\"msg\":\"%s\"}", targ, rest);
+                    }
+                  else
+                    {
+                      msg = format("{\"type\":\"chat\",\"id\":\"\",\"msg\":\"%s\"}", s);
+                    }
+                  ubyte[] b = [0x3];
+                  client.send(b,true);
+                  client.send(msg);
+                }
+            }))
+          {
+            
+            poll(items, dur!"msecs"(1));
+            if (items[0].returnedEvents & PollFlags.pollIn)
+              {
+                ClientMessage message;
+                bool invalidMessage = false;
+                /// first frame will be the id
+                frame.rebuild();
+                client.receive(frame);
+                    // see what sort of message this is
+                message.type = cast(MessageType)frame.data[0];
+                if(message.type == MessageType.Heartbeat)
+                  {
+                    //                  writeln("got heartbeat response from server");
+                    lastServerHeart = MonoTime.currTime;
+                  }
+                
+                if(frame.more)
+                  {
+                    writeln("recvd ", message.type);
+                    if(message.type == MessageType.Data)
+                      {
+                        frame.rebuild();
+                        client.receive(frame);
+                        message.json = frame.data.asString.dup;
+                        try
+                          {
+                            JSONValue js = message.json.parseJSON;
+                            string type = js["type"].str;
+                            writeln("type ",type);
+                            final switch(type)
+                              {
+                              case "chat":
+                                writeln(js["msg"].str);
+                                break;
+                              case "request":
+                                foreach(jsv;js["choices"].array)
+                                   {
+                                     writeln(jsv["id"].integer," : ", jsv["text"].str);
+                                  }
+                                awaitingResponse=true;
+                              }
+                          }
+                        catch(Exception e)
+                          {
+                            writeln(e);
+                          }
+
+                      }
+                    else
+                      {                
+                        //bad message, swallow it up
+                        invalidMessage = true;
+                        do {
+                          frame.rebuild();
+                          client.receive(frame);
+                        } while (frame.more);
+                        //                        writeln("invalid message received");
+                      }
+
+                  }
+              }
+          }
+
+        if(MonoTime.currTime - lastHeart > dur!"msecs"(100))
+            {
+              // send a heartbeat req to the server
+              //             writeln("sending heart");
+              ubyte[] b = [0x2];
+              client.send(b);              
+              lastHeart = MonoTime.currTime;
+            }
+
+      }
+  
+
+
+}
+
+void main()
+{
+  writeln("Enter client ID");
+  id = readln().chomp;
+  auto worker = spawn(&client, thisTid);
+
+// Switch messages between sockets
+    while (true) {
+      string msg = readln().chomp;
+        send(worker, msg);
+    }
+}
