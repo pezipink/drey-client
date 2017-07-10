@@ -1,3 +1,4 @@
+
 import std.stdio;// Simple request-reply broker
 import std.concurrency;
 import core.time;
@@ -11,7 +12,9 @@ enum MessageType
   {
     Connect = 0x1,
     Heartbeat = 0x2,
-    Data  = 0x3,    
+    Data  = 0x3,
+    Status = 0x4,
+    Universe = 0x5
   }
 
 struct ClientMessage
@@ -31,13 +34,15 @@ string toResponseJson(string response)
   return js.toString;
 }
 
+
+
+
+
 void client(Tid parentId)
 {
     auto client = Socket(SocketType.dealer);
     client.identity =  id;
     client.connect("tcp://localhost:5560");
-    //    auto server = Socket(SocketType.router);
-    //    server.connect("tcp://*:5550");
     
     // Initialize poll set
     auto items = [
@@ -49,7 +54,7 @@ void client(Tid parentId)
     writeln("sent connect message");
     MonoTime lastHeart = MonoTime.currTime;
     MonoTime lastServerHeart = MonoTime.currTime;
-    bool awaitingResponse = false;
+
     while (true)
       {
         Frame frame;
@@ -57,21 +62,16 @@ void client(Tid parentId)
            (dur!"msecs"(1),
             (string s)
             {
-              if(awaitingResponse)
+              if(s.startsWith("\\c "))
                 {
-                  awaitingResponse = false;
-                  ubyte[] b = [0x3];
-                  client.send(b,true);
-                  client.send(toResponseJson(s));
-                }
-              else
-                {
+                  //chat
+                  s = s[3..$];
                   string msg = "";
                   int index = indexOf(s,":");
                   if(index > -1)
                     {
-                      string targ = s[0..index];
-                      string rest = s[index.. $];
+                      string targ = s[0..index].chomp;
+                      string rest = s[index.. $].chomp;
                       writeln("targ ", targ , " rest ", rest);
                       msg = format("{\"type\":\"chat\",\"id\":\"%s\",\"msg\":\"%s\"}", targ, rest);
                     }
@@ -83,9 +83,30 @@ void client(Tid parentId)
                   client.send(b,true);
                   client.send(msg);
                 }
+              else if(s.startsWith("\\universe"))
+                {
+                  // return list of all data from server
+                  ubyte[] b = [MessageType.Universe];
+                  client.send(b);                  
+               }
+              else if(s.startsWith("\\status"))
+                {
+                  // will re-issue a request for this client if
+                  // waiting
+                  ubyte[] b = [MessageType.Status];
+                  client.send(b);  
+                }
+              else
+                {
+                  // assume this is a response to a request
+                  ubyte[] b = [MessageType.Data];
+                  client.send(b,true);
+                  client.send(toResponseJson(s));
+                }
             }))
           {
-            
+            // no client messages need processing, see if the server
+            // has anything to say for itself
             poll(items, dur!"msecs"(1));
             if (items[0].returnedEvents & PollFlags.pollIn)
               {
@@ -94,73 +115,76 @@ void client(Tid parentId)
                 /// first frame will be the id
                 frame.rebuild();
                 client.receive(frame);
-                    // see what sort of message this is
+                // see what sort of message this is
                 message.type = cast(MessageType)frame.data[0];
                 if(message.type == MessageType.Heartbeat)
-                  {
-                    //                  writeln("got heartbeat response from server");
+                  {                
                     lastServerHeart = MonoTime.currTime;
                   }
-                
-                if(frame.more)
+                else if(message.type == MessageType.Universe)
                   {
-                    writeln("recvd ", message.type);
-                    if(message.type == MessageType.Data)
+                    writeln("rcvd universe repsonse");
+                  }
+                else if(message.type == MessageType.Status)
+                  {
+                    writeln("rcvd status response");
+                  }
+                else if(message.type == MessageType.Data)
+                  {
+                    frame.rebuild();
+                    client.receive(frame);
+                    message.json = frame.data.asString.dup;
+                    try
                       {
-                        frame.rebuild();
-                        client.receive(frame);
-                        message.json = frame.data.asString.dup;
-                        try
+                        JSONValue js = message.json.parseJSON;
+                        string type = js["type"].str;
+                        //                        writeln("type ",type);
+                        switch(type)
                           {
-                            JSONValue js = message.json.parseJSON;
-                            string type = js["type"].str;
-                            writeln("type ",type);
-                            final switch(type)
+                          case "chat":
+                            writeln(js["msg"].str);
+                            break;
+                          case "request":
+                            writeln(js["header"].str);
+                            foreach(jsv;js["choices"].array)
                               {
-                              case "chat":
-                                writeln(js["msg"].str);
-                                break;
-                              case "request":
-                                writeln(js["header"].str);
-                                foreach(jsv;js["choices"].array)
-                                   {
-                                     if(jsv["id"].type() == JSON_TYPE.INTEGER)
-                                       {
-                                         writeln(jsv["id"].integer," : ", jsv["text"].str);
-                                       }
-                                     else
-                                       {
-                                     writeln(jsv["id"].str," : ", jsv["text"].str);
-                                       }
+                                if(jsv["id"].type() == JSON_TYPE.INTEGER)
+                                  {
+                                    writeln(jsv["id"].integer," : ", jsv["text"].str);
                                   }
-                                awaitingResponse=true;
+                                else
+                                  {
+                                    writeln(jsv["id"].str," : ", jsv["text"].str);
+                                  }
                               }
+                            break;
+                          default:
+                            writeln(js);
+                            break;
+                                
                           }
-                        catch(Exception e)
-                          {
-                            writeln(e);
-                          }
-
                       }
-                    else
-                      {                
-                        //bad message, swallow it up
-                        invalidMessage = true;
-                        do {
-                          frame.rebuild();
-                          client.receive(frame);
-                        } while (frame.more);
-                        //                        writeln("invalid message received");
+                    catch(Exception e)
+                      {
+                        writeln(e);
                       }
 
+                  }
+                else
+                  {                
+                    //bad message, swallow it up
+                    invalidMessage = true;
+                    do {
+                      frame.rebuild();
+                      client.receive(frame);
+                    } while (frame.more);
+                    writeln("invalid message received");
                   }
               }
           }
-
         if(MonoTime.currTime - lastHeart > dur!"msecs"(100))
             {
               // send a heartbeat req to the server
-              //             writeln("sending heart");
               ubyte[] b = [0x2];
               client.send(b);              
               lastHeart = MonoTime.currTime;
