@@ -2,6 +2,7 @@ import std.stdio;// Simple request-reply broker
 import std.concurrency;
 import core.time;
 import std.format;
+import std.algorithm;
 import zmqd;
 import std.string;
 import std.json;
@@ -200,21 +201,21 @@ void client(Tid parentId)
                   writeln("\\c <text>\t\t send global chat message");
                   writeln("\\c <id>:<text>\t\t send chat message to player <id>");
                   writeln("\\status \t\t if the server is waiting for you to reply, it will re-send your options");
-                  writeln("\\objects \t\t lists visible game object ids");
-                  writeln("\\objects <prop> ... \t lists visible game object ids and their <prop> ... if present");
-                  writeln("\\object <id> \t\t displays all information about object <id>");
-                  writeln("\\locations \t\t lists visible game location keys");
-                  writeln("\\locations <prop> ... \t lists visible game location keys and their <prop> ... if present");
-                  writeln("\\location <key> \t displays all visible infromation about location <key>");
+                  writeln("\\objs \t\t\t lists visible game object ids");
+                  writeln("\\objs <prop> ... \t lists visible game object ids and their <prop> ... if present");
+                  writeln("\\obj <id> \t\t displays all information about object <id>");
+                  writeln("\\locs \t\t\t lists visible game location keys");
+                  writeln("\\locs <prop> ... \t lists visible game location keys and their <prop> ... if present");
+                  writeln("\\loc <key> \t\t displays all visible infromation about location <key>");
                   
                 }
-              else if(s.startsWith("\\objects"))
+              else if(s.startsWith("\\objs"))
                 {
                   s = s.strip;
-                  if(s == "\\objects")
+                  if(s == "\\objs")
                     {
                       writeln("the following objects are visible");
-                      foreach(k;uni.objects.keys)
+                      foreach(k;sort(uni.objects.keys))
                         {
                           auto go = uni.objects[k];
                           writeln(format("id %s : loc %s",go.id, go.locationKey));
@@ -224,7 +225,7 @@ void client(Tid parentId)
                     {
                       // extract props
                       int[string] props;
-                      s = s[8..$];
+                      s = s[5..$];
                       foreach(p;s.split(' '))
                         {
                           props[s.strip]=0;
@@ -238,6 +239,58 @@ void client(Tid parentId)
                             {
                               if(p.key in props)
                                 {
+                                  write(format("%s : %s - ",p.key, p.value));
+                                }                              
+                            }
+                          writeln();
+                        }
+                    }
+                }
+              else if(s.startsWith("\\obj"))
+                {
+                  auto s2 = s = s[5..$];
+                  auto id = parse!int(s2);
+                  if(id !in uni.objects)
+                    {
+                      writeln("gameobject ", id, " does not exist");
+                    }
+                  else
+                    {
+                      auto go = uni.objects[id];
+                      writeln(go.props);
+                    }
+                }
+
+              else if(s.startsWith("\\locs"))
+                {
+                  s = s.strip;
+                  if(s == "\\locs")
+                    {
+                      writeln("the following locations are visible");
+                      foreach(k;sort(uni.locations.keys))
+                        {
+                          auto loc = uni.locations[k];
+                          writeln(format("key : %s", loc.key));
+                        }
+                    }
+                  else
+                    {
+                      // extract props
+                      int[string] props;
+                      s = s[5..$];
+                      foreach(p;s.split(' '))
+                        {
+                          props[s.strip]=0;
+                        }
+                      writeln("the following locations are visible");
+                      foreach(k;uni.locations.keys)
+                        {
+                          auto loc = uni.locations[s];
+                          writeln(format("key %s",loc.key));
+                          foreach(p;loc.props.byKeyValue)
+                            {
+                              if(p.key in props)
+                                {
                                   writeln(format("%s : %s",p.key, p.value));
                                 }
                             }
@@ -245,18 +298,61 @@ void client(Tid parentId)
 
                     }
                 }
-              else if(s.startsWith("\\object"))
+              else if(s.startsWith("\\loc"))
                 {
-                  auto s2 = s = s[8..$];
-                  auto id = parse!int(s2);
-                  auto go = uni.objects[id];
-                  foreach(p;go.props.byKeyValue)
+                  auto key = s = s[5..$];
+                  key = key.strip;
+                  if(key !in uni.locations)
                     {
-                      writeln(format("%s : %s",p.key,p.value));
+                      writeln("location ", key, " does not exist");
                     }
-                      
-                  
+                  else
+                    {
+                      writeln(key);
+                      auto loc = uni.locations[key.strip];
+                      writeln("props");
+                      foreach(p;loc.props.byKeyValue)
+                        {
+                          writeln(format("\t%s : %s",p.key,p.value));
+                        }
+                      writeln("parent");
+                      writeln(format("\t%s : %s",loc.parent.id,loc.parent.key));
+                      writeln("\tprops");
+                      foreach(p2;loc.parent.props.byKeyValue)
+                        {
+                          writeln(format("\t\t%s : %s",p2.key,p2.value));
+                        }
+                      writeln("children");                      
+                      foreach(x;loc.children)
+                        {
+                          writeln(format("\t%s : %s",x.id,x.key));
+                          writeln("\tprops");
+                          foreach(p2;x.props.byKeyValue)
+                            {
+                              writeln(format("\t\t%s : %s",p2.key,p2.value));
+                            }
+                        }
+                      writeln("siblings");                      
+                      foreach(x;loc.siblings)
+                        {
+                          writeln(format("\t%s : %s",x.id,x.key));
+                          writeln("\tprops");
+                          foreach(p2;x.props.byKeyValue)
+                            {
+                              writeln(format("\t\t%s : %s",p2.key,p2.value));
+                            }
+                        }
+                      writeln("objects");                      
+                      foreach(x;sort(loc.objects.keys))
+                        {
+                          auto go = loc.objects[x];
+                          writeln(format("\t%s",go.id));
+                        }                      
+
+                    }
                 }
+
+
 
               else if(s.startsWith("\\universe"))
                 {
@@ -270,6 +366,10 @@ void client(Tid parentId)
                   // waiting
                   ubyte[] b = [MessageType.Status];
                   client.send(b);  
+                }
+              else if(s.startsWith("\\"))
+                {
+                  writeln("unrecognised command");
                 }
               else
                 {
@@ -414,7 +514,13 @@ void client(Tid parentId)
                           case "mo":
                             auto l = js["l"].str;
                             auto i = js["o"].integer.to!int;
-                            uni.objects[i].locationKey = l;
+                            auto o = uni.objects[i];
+                            if(o.locationKey !is null)
+                              {
+                                uni.locations[uni.objects[i].locationKey].objects.remove(i);
+                              }
+                            o.locationKey = l;
+                            uni.locations[l].objects[i] = o;
                             break;
                           default:
                             writeln(js);
