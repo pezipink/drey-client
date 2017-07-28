@@ -495,6 +495,10 @@ void client(Tid parentId)
                             auto obj = uni.objects[i];
                             obj.props[k] = v;
                             break;
+                          case "dui":
+                            auto id = js["i"].integer.to!int;
+                            uni.objects.remove(id);
+                            break;
                           case "aui":
                             auto o = js["o"];
                             auto go = new GameObject;
